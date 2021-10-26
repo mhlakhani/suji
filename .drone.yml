@@ -1,0 +1,59 @@
+---
+kind: pipeline
+name: default
+
+steps:
+- name: build_rust
+  image: rust:latest
+  pull: true
+  environment:
+    CARGO_TARGET_DIR: /var/cache/drone/cargo
+    CARGO_HOME: /var/cache/drone/cargo
+  volumes:
+  - name: cache
+    path: /var/cache/drone
+  commands:
+    - cargo build
+
+- name: test_rust
+  image: rust:latest
+  pull: true
+  environment:
+    CARGO_TARGET_DIR: /var/cache/drone/cargo
+    CARGO_HOME: /var/cache/drone/cargo
+  volumes:
+  - name: cache
+    path: /var/cache/drone
+  commands:
+    - cargo test
+
+- name: generate_tags
+  image: rust:latest
+  commands:
+    - git rev-parse HEAD > .tags
+  when:
+    branch:
+      - master
+    event:
+      - push
+  
+- name: build_docker
+  image: docker:dind
+  volumes:
+  - name: dockersock
+    path: /var/run/docker.sock
+  commands:
+    - docker build -t suji:$(cat .tags) --rm=false .
+  when:
+    branch:
+      - master
+    event:
+      - push
+
+volumes:
+- name: cache
+  host:
+    path: /var/cache/drone
+- name: dockersock
+  host:
+    path: /var/run/docker.sock
