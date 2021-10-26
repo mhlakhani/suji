@@ -1,6 +1,8 @@
-use bevy::{prelude::*, tasks::prelude::*};
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_tasks::prelude::*;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 use serde_json::Value;
 use tera::Tera;
 
@@ -928,6 +930,7 @@ fn main() {
     if config.output_dir.is_relative() {
         config.output_dir = cwd.join(config.output_dir);
     }
+
     App::build()
         .insert_resource(config)
         .add_stage_before(
