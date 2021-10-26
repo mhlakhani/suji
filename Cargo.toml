@@ -1,0 +1,16 @@
+[package]
+name = "suji"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bevy = { version = "0.5", features = []}
+glob = "0.3"
+itertools = "0.10"
+maplit = "1"
+pulldown-cmark = "0.8"
+tera = "1"
+serde = "1"
+serde_json = "1"
