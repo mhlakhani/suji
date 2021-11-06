@@ -1,10 +1,22 @@
+use axum::{
+    error_handling::HandleErrorExt, http::StatusCode, routing::service_method_routing as service,
+    Router,
+};
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use bevy_tasks::prelude::*;
+use hotwatch::{
+    blocking::{Flow, Hotwatch},
+    Event,
+};
 use itertools::Itertools;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::Value;
+use slog::{error, info, o, Drain};
+use std::net::SocketAddr;
+use structopt::StructOpt;
 use tera::Tera;
+use tower_http::services::ServeDir;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::{path::Path, path::PathBuf};
@@ -46,7 +58,7 @@ enum DynamicContentType {
 }
 
 // Immutable config loaded from the user
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct Config {
     source_dir: PathBuf,
     output_dir: PathBuf,
@@ -913,24 +925,7 @@ enum SystemTag {
     OutputFolderCreator,
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    assert!(args.len() == 2, "Expected exactly one argument!");
-    let source =
-        std::fs::read_to_string(&args[1]).expect(&format!("Unable to config file {}", args[1]));
-    let mut config: Config =
-        serde_json::from_str(&source).expect("Config is not in the expected format!");
-    let cwd = std::env::current_dir().expect("Couldn't get current dir!");
-    if config.source_dir.to_string_lossy() == "." {
-        config.source_dir = cwd.clone();
-    }
-    if config.source_dir.is_relative() {
-        config.source_dir = cwd.join(config.source_dir);
-    }
-    if config.output_dir.is_relative() {
-        config.output_dir = cwd.join(config.output_dir);
-    }
-
+fn run(config: Config) {
     App::build()
         .insert_resource(config)
         .add_stage_before(
@@ -1010,4 +1005,112 @@ fn main() {
                 .after(SystemTag::OutputFolderCreator),
         )
         .run();
+}
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "suji", about = "Static site generator.")]
+struct Args {
+    #[structopt(help = "Path to config file")]
+    config_path: String,
+
+    #[structopt(long, help = "Whether to watch for changes.")]
+    watch: bool,
+
+    #[structopt(long, help = "Whether to serve output directory.")]
+    serve: bool,
+
+    #[structopt(long, help = "Port to bind.", default_value = "8000")]
+    port: u16,
+}
+
+#[tokio::main]
+async fn main() {
+    let args = Args::from_args();
+    let source = std::fs::read_to_string(&args.config_path)
+        .expect(&format!("Unable to config file {}", args.config_path));
+    let mut config: Config =
+        serde_json::from_str(&source).expect("Config is not in the expected format!");
+    let cwd = std::env::current_dir().expect("Couldn't get current dir!");
+
+    // TODO: Verify config is inside source dir
+    if config.source_dir.to_string_lossy() == "." {
+        config.source_dir = cwd.clone();
+    }
+    if config.source_dir.is_relative() {
+        config.source_dir = cwd.join(config.source_dir);
+    }
+    if config.output_dir.is_relative() {
+        config.output_dir = cwd.join(config.output_dir);
+    }
+
+    let decorator = slog_term::TermDecorator::new().build();
+    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain).build().fuse();
+
+    let logger = slog::Logger::root(drain, o!());
+
+    info!(logger, "Running initial generation...");
+    run(config.clone());
+
+    if args.watch {
+        let config = config.clone();
+        let source_dir = config.source_dir.clone();
+        let output_dir = config.output_dir.clone();
+        let logger = logger.clone();
+        tokio::task::spawn_blocking(move || {
+            let logger2 = logger.clone();
+            let mut watcher = Hotwatch::new().expect("Couldn't create watcher!");
+            watcher
+                    .watch(&source_dir, move |event| {
+                        if let Event::Error(e, path) = event {
+                            error!(logger2, "Error watching file system!"; "error" => ?e, "path" => ?path);
+                            Flow::Exit
+                        } else {
+                            let maybe_path = match &event {
+                                // These events can't affect the output
+                                Event::Chmod(_) | Event::Error(_, _) | Event::Rescan => None,
+                                // We ignore the Write and Remove as we want to react faster,
+                                // so we just handle the notices
+                                Event::Write(_) | Event::Remove(_) => None,
+                                Event::Create(path) => Some(path),
+                                Event::NoticeWrite(path) | Event::NoticeRemove(path) => Some(path),
+                                Event::Rename(_from, to) => Some(to),
+                            };
+                            if let Some(path) = maybe_path {
+                                if path.starts_with(&output_dir) {
+                                    // Swallow
+                                } else {
+                                    info!(logger2, "Rerunning generation..."; "event" => ?event);
+                                    run(config.clone());
+                                }
+                            };
+                            Flow::Continue
+                        }
+                    })
+                    .expect("Couldn't watch!");
+            info!(logger, "Watcher successfully set up...");
+            watcher.run();
+        });
+    }
+
+    if args.serve {
+        let logger2 = logger.clone();
+        let app = Router::new().nest(
+            "/",
+            service::get(ServeDir::new(config.output_dir.clone())).handle_error(
+                move |error: std::io::Error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        error!(logger2, "Unhandled internal error"; "error" => ?error),
+                    )
+                },
+            ),
+        );
+        let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
+        info!(logger, "Setup HTTP server to listen on"; "port" => args.port);
+        axum::Server::bind(&addr)
+            .serve(app.into_make_service())
+            .await
+            .expect("Couldn't serve output directory!")
+    }
 }
