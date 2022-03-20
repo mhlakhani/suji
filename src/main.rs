@@ -66,6 +66,7 @@ struct Config {
     sources: HashMap<String, SourceType>,
     routes: HashMap<String, String>,
     blogpost_template: String,
+    site_url: String,
 }
 
 struct LoadStaticContentGlob {
@@ -163,6 +164,7 @@ fn static_content_source_loader(
             })
             .insert(URL {
                 url: relative.to_string_lossy().to_string(),
+                absolute: format!("{}{}", config.site_url, relative.to_string_lossy()),
             })
             .insert(RelativeOutputPath { path: relative })
             .insert(CopySourceToOutput {})
@@ -203,6 +205,11 @@ struct DynamicContentMetadata {
     markdown: bool,
     #[serde(flatten)]
     stuff: HashMap<String, Value>,
+    // OpenGraph metadata. Title is used above
+    #[serde(default)]
+    og_type: String,
+    #[serde(default)]
+    og_description: String,
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +295,11 @@ fn dynamic_content_source_loader(
                         )
                     }
                 }
+                metadata.og_type = "article".to_string();
+                if let Some(excerpt) = metadata.stuff.get("excerpt") {
+                    metadata.og_description =
+                        excerpt.as_str().map(|s| s.to_owned()).unwrap_or_default();
+                }
             }
             DynamicContentType::SinglePage
             | DynamicContentType::BlogpostTagPage
@@ -310,14 +322,12 @@ fn dynamic_content_source_loader(
 #[derive(Debug)]
 struct URL {
     url: String,
+    absolute: String,
 }
 
-fn url_for_impl(
-    routes: &HashMap<String, String>,
-    route: &String,
-    replacements: &HashMap<String, Value>,
-) -> URL {
-    let mut url = routes
+fn url_for_impl(config: &Config, route: &String, replacements: &HashMap<String, Value>) -> URL {
+    let mut url = config
+        .routes
         .get(route)
         .expect(&format!("No route defined for {}", route))
         .clone();
@@ -334,11 +344,12 @@ fn url_for_impl(
         };
     }
     assert!(!url.contains("{"), "URL should be fully generated: {}", url);
-    URL { url }
+    let absolute = format!("{}{}", config.site_url, url);
+    URL { url, absolute }
 }
 
 fn metadata_to_url(config: &Config, metadata: &DynamicContentMetadata) -> URL {
-    url_for_impl(&config.routes, &metadata.route, &metadata.stuff)
+    url_for_impl(config, &metadata.route, &metadata.stuff)
 }
 
 fn generate_urls(
@@ -356,7 +367,7 @@ fn generate_urls(
 }
 
 struct UrlFor {
-    routes: HashMap<String, String>,
+    config: Config,
 }
 
 impl tera::Function for UrlFor {
@@ -366,7 +377,7 @@ impl tera::Function for UrlFor {
                 .map_err(|_| tera::Error::msg("invalid route")),
             None => Err(tera::Error::msg("missing route")),
         }?;
-        let url = url_for_impl(&self.routes, &route, &args);
+        let url = url_for_impl(&self.config, &route, &args);
         Ok(tera::to_value(url.url)?)
     }
 }
@@ -707,7 +718,7 @@ fn dynamic_content_generator(
     tera.register_function("blogposts_tagged", tagged_posts);
     tera.register_function("blogposts_all", all_posts);
     let url_for = UrlFor {
-        routes: config.routes.clone(),
+        config: config.clone(),
     };
     tera.register_function("url_for", url_for);
     let tags_and_counts = tera::to_value(BlogpostTagsAndCounts {
@@ -758,6 +769,10 @@ fn dynamic_content_generator(
         context.insert("blog_tags_and_counts", &tags_and_counts);
         context.insert("blog_archives", &blog_archives);
         context.insert("sitemap", &sitemap);
+        context.insert("url_for_this", &url.url);
+        context.insert("og_url", &url.absolute);
+        context.insert("og_type", &metadata.og_type);
+        context.insert("og_description", &metadata.og_description);
         // TODO: Better error messages
         let contents = if let Some(template_name) = metadata.template.clone() {
             match type_ {
