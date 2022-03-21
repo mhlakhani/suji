@@ -205,7 +205,9 @@ struct DynamicContentMetadata {
     markdown: bool,
     #[serde(flatten)]
     stuff: HashMap<String, Value>,
-    // OpenGraph metadata. Title is used above
+    // OpenGraph metadata. Title is used above if og_title not set
+    #[serde(default)]
+    og_title: String,
     #[serde(default)]
     og_type: String,
     #[serde(default)]
@@ -772,6 +774,11 @@ fn dynamic_content_generator(
         context.insert("url_for_this", &url.url);
         context.insert("og_url", &url.absolute);
         context.insert("og_type", &metadata.og_type);
+        if !metadata.og_title.is_empty() {
+            context.insert("og_title", &metadata.og_title);
+        } else {
+            context.insert("og_title", &metadata.title);
+        }
         context.insert("og_description", &metadata.og_description);
         // TODO: Better error messages
         let contents = if let Some(template_name) = metadata.template.clone() {
