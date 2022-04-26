@@ -155,7 +155,7 @@ fn static_content_source_loader(
 ) {
     let paths = query.iter().flat_map(|glob| {
         glob::glob(&glob.glob)
-            .expect(&format!("Unable to read glob: {}", &glob.glob))
+            .unwrap_or_else(|_| panic!("Unable to read glob: {}", &glob.glob))
             .filter_map(|p| p.ok())
     });
     for path in paths {
@@ -178,19 +178,18 @@ fn static_content_source_loader(
 fn template_source_loader(query: Query<&LoadTemplateGlob>, mut commands: Commands) {
     let mut iter = query.iter();
     let tera = iter.next().map(|glob| {
-        Tera::new(&glob.glob).expect(&format!("Unable to load templates from {}", glob.glob))
+        Tera::new(&glob.glob)
+            .unwrap_or_else(|_| panic!("Unable to load templates from {}", glob.glob))
     });
     if tera.is_none() {
         return;
     }
     let mut tera = tera.unwrap();
-    while let Some(glob) = iter.next() {
-        let new =
-            Tera::new(&glob.glob).expect(&format!("Unable to load templates from {}", glob.glob));
-        tera.extend(&new).expect(&format!(
-            "Unable to extend with templates from {}",
-            glob.glob
-        ));
+    for glob in iter {
+        let new = Tera::new(&glob.glob)
+            .unwrap_or_else(|_| panic!("Unable to load templates from {}", glob.glob));
+        tera.extend(&new)
+            .unwrap_or_else(|_| panic!("Unable to extend with templates from {}", glob.glob));
     }
     commands.insert_resource(tera);
 }
@@ -230,7 +229,7 @@ fn dynamic_content_source_loader(
 ) {
     let paths = query.iter().flat_map(|glob| {
         glob::glob(&glob.glob)
-            .expect(&format!("Unable to read glob: {}", &glob.glob))
+            .unwrap_or_else(|_| panic!("Unable to read glob: {}", &glob.glob))
             .filter_map(|p| p.ok())
             .map(|path| (glob.type_.clone(), path))
     });
@@ -238,18 +237,17 @@ fn dynamic_content_source_loader(
     for (type_, path) in paths {
         let relative = make_relative(&path, config.source_dir.as_path());
         let source = std::fs::read_to_string(&path)
-            .expect(&format!("Unable to read file {}", path.to_string_lossy()));
+            .unwrap_or_else(|_| panic!("Unable to read file {}", path.to_string_lossy()));
         assert!(source.starts_with("{\n"));
         let token = "\n}\n\n";
-        let split = source.find(token).expect(&format!(
-            "Need terminator for metadata in {}!",
-            path.to_string_lossy()
-        ));
-        let mut metadata: DynamicContentMetadata = serde_json::from_str(&source[0..split + 2])
-            .expect(&format!(
-                "Could not parse metadata in {}:",
+        let split = source.find(token).unwrap_or_else(|| {
+            panic!(
+                "Need terminator for metadata in {}!",
                 path.to_string_lossy()
-            ));
+            )
+        });
+        let mut metadata: DynamicContentMetadata = serde_json::from_str(&source[0..split + 2])
+            .unwrap_or_else(|_| panic!("Could not parse metadata in {}:", path.to_string_lossy()));
         // TODO: See if we can avoid the copy here
         let contents = source[split + token.len()..].to_string();
         match type_ {
@@ -260,10 +258,12 @@ fn dynamic_content_source_loader(
                     "slug".to_string(),
                     relative
                         .file_stem()
-                        .expect(&format!(
-                            "Path must have a stem: {}",
-                            relative.as_path().to_string_lossy()
-                        ))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "Path must have a stem: {}",
+                                relative.as_path().to_string_lossy()
+                            )
+                        })
                         .to_string_lossy()
                         .to_string()
                         .into(),
@@ -271,17 +271,21 @@ fn dynamic_content_source_loader(
                 let date = metadata
                     .stuff
                     .get("date")
-                    .expect(&format!(
-                        "Blogpost at {} is missing a date!",
-                        relative.as_path().to_string_lossy()
-                    ))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Blogpost at {} is missing a date!",
+                            relative.as_path().to_string_lossy()
+                        )
+                    })
                     .as_str()
-                    .expect(&format!(
-                        "Blogpost at {} has a non-string date!",
-                        relative.as_path().to_string_lossy()
-                    ))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Blogpost at {} has a non-string date!",
+                            relative.as_path().to_string_lossy()
+                        )
+                    })
                     .to_string();
-                let parts: Vec<_> = date.split("/").collect();
+                let parts: Vec<_> = date.split('/').collect();
                 match parts.as_slice() {
                     [year, month, day] => {
                         metadata
@@ -326,6 +330,7 @@ fn dynamic_content_source_loader(
 // URL (identifier) where this path will be at
 // TODO: Maybe allow the single page ones to define routes inline
 #[derive(Component, Debug)]
+#[allow(clippy::upper_case_acronyms)]
 struct URL {
     url: String,
     absolute: String,
@@ -335,11 +340,11 @@ fn url_for_impl(config: &Config, route: &String, replacements: &HashMap<String, 
     let mut url = config
         .routes
         .get(route)
-        .expect(&format!("No route defined for {}", route))
+        .unwrap_or_else(|| panic!("No route defined for {}", route))
         .clone();
     // Dynamic routes might need things replaced in from the stuff
     for (key, value) in replacements.iter() {
-        if url.find("{").is_none() {
+        if !url.contains('{') {
             break;
         }
         let to_replace = format!("{{{}}}", key);
@@ -349,7 +354,7 @@ fn url_for_impl(config: &Config, route: &String, replacements: &HashMap<String, 
             url = url.replace(&to_replace, value);
         };
     }
-    assert!(!url.contains("{"), "URL should be fully generated: {}", url);
+    assert!(!url.contains('{'), "URL should be fully generated: {}", url);
     let absolute = format!("{}{}", config.site_url, url);
     URL { url, absolute }
 }
@@ -383,7 +388,7 @@ impl tera::Function for UrlFor {
                 .map_err(|_| tera::Error::msg("invalid route")),
             None => Err(tera::Error::msg("missing route")),
         }?;
-        let url = url_for_impl(&self.config, &route, &args);
+        let url = url_for_impl(&self.config, &route, args);
         Ok(tera::to_value(url.url)?)
     }
 }
@@ -542,18 +547,15 @@ fn blogpost_indexer(
             // Do some basic validation
             let month_name = month_names
                 .get(month.as_str())
-                .expect(&format!("Invalid month: {} for URL {}", month, url.url))
+                .unwrap_or_else(|| panic!("Invalid month: {} for URL {}", month, url.url))
                 .to_string();
             // We need to validate the excerpt
             let excerpt = metadata
                 .stuff
                 .get("excerpt")
-                .expect(&format!("No excerpt provided for blogpost at {}!", url.url))
+                .unwrap_or_else(|| panic!("No excerpt provided for blogpost at {}!", url.url))
                 .as_str()
-                .expect(&format!(
-                    "Excerpt is not a string for blogpost at {}",
-                    url.url
-                ))
+                .unwrap_or_else(|| panic!("Excerpt is not a string for blogpost at {}", url.url))
                 .to_string();
             // We have a safe default
             let tags: Vec<String> = metadata
@@ -664,7 +666,7 @@ impl tera::Function for BlogpostFetcherFunction {
         let tag = match args.get("tag") {
             Some(val) => tera::from_value::<String>(val.clone())
                 .map_err(|_| tera::Error::msg("invalid tag"))
-                .map(|s| Some(s)),
+                .map(Some),
             None => Ok(None),
         }?;
 
@@ -746,10 +748,12 @@ fn dynamic_content_generator(
             .clone()
             .expect("Blogpost template has no path!"),
     ))
-    .expect(&format!(
-        "Couldn't read blogpost template from {}!",
-        &config.blogpost_template
-    ));
+    .unwrap_or_else(|_| {
+        panic!(
+            "Couldn't read blogpost template from {}!",
+            &config.blogpost_template
+        )
+    });
     // TODO: Figure out parallelization
     for (entity, url, type_, metadata, contents) in query.iter() {
         let mut context = tera::Context::new();
@@ -797,17 +801,17 @@ fn dynamic_content_generator(
                     let template =
                         blogpost_template_contents.replace("{{ content | safe }}", &html_output);
                     tera.render_str(&template, &context)
-                        .expect(&format!("Error generating source for {}", url.url))
+                        .unwrap_or_else(|_| panic!("Error generating source for {}", url.url))
                 }
                 _ => {
                     // render the template as is
                     tera.render(&template_name, &context)
-                        .expect(&format!("Error generating source for {}", url.url))
+                        .unwrap_or_else(|_| panic!("Error generating source for {}", url.url))
                 }
             }
         } else {
             tera.render_str(&contents.contents, &context)
-                .expect(&format!("Error generating source for {}", url.url))
+                .unwrap_or_else(|_| panic!("Error generating source for {}", url.url))
         };
         commands
             .entity(entity)
@@ -886,10 +890,8 @@ fn output_folder_creator(query: Query<&AbsoluteOutputPath>) {
         })
         .collect();
     for path in paths {
-        std::fs::create_dir_all(path).expect(&format!(
-            "Could not create directory: {}",
-            path.to_string_lossy()
-        ));
+        std::fs::create_dir_all(path)
+            .unwrap_or_else(|_| panic!("Could not create directory: {}", path.to_string_lossy()));
     }
 }
 
@@ -903,11 +905,13 @@ fn static_file_copier(
 ) {
     // TODO: Look at batch sizes here
     query.par_for_each(&pool, 8, |(from, to, _)| {
-        std::fs::copy(from.path.as_path(), to.path.as_path()).expect(&format!(
-            "Unable to copy {} to {}",
-            from.path.as_path().to_string_lossy(),
-            to.path.as_path().to_string_lossy()
-        ));
+        std::fs::copy(from.path.as_path(), to.path.as_path()).unwrap_or_else(|_| {
+            panic!(
+                "Unable to copy {} to {}",
+                from.path.as_path().to_string_lossy(),
+                to.path.as_path().to_string_lossy()
+            )
+        });
     });
 }
 
@@ -922,10 +926,12 @@ fn file_contents_writer(
 ) {
     // TODO: Look at batch sizes here
     query.par_for_each(&pool, 8, |(path, contents)| {
-        std::fs::write(path.path.as_path(), &contents.contents).expect(&format!(
-            "Unable to write output to {}",
-            path.path.as_path().to_string_lossy()
-        ));
+        std::fs::write(path.path.as_path(), &contents.contents).unwrap_or_else(|_| {
+            panic!(
+                "Unable to write output to {}",
+                path.path.as_path().to_string_lossy()
+            )
+        });
     });
 }
 
@@ -1036,7 +1042,7 @@ struct Args {
 async fn main() {
     let args = Args::from_args();
     let source = std::fs::read_to_string(&args.config_path)
-        .expect(&format!("Unable to config file {}", args.config_path));
+        .unwrap_or_else(|_| panic!("Unable to config file {}", args.config_path));
     let mut config: Config =
         serde_json::from_str(&source).expect("Config is not in the expected format!");
     let cwd = std::env::current_dir().expect("Couldn't get current dir!");
