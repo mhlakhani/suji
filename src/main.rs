@@ -21,7 +21,7 @@ use tower_http::services::ServeDir;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::{path::Path, path::PathBuf};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Component, Deserialize)]
 enum SourceType {
     // File will be copied to the corresponding path in the output dir directly
     StaticContent,
@@ -41,7 +41,7 @@ enum SourceType {
     DynamicContentSitemap,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Component, Deserialize, PartialEq, Eq)]
 enum DynamicContentType {
     // A single page that gets rendered
     SinglePage,
@@ -58,7 +58,7 @@ enum DynamicContentType {
 }
 
 // Immutable config loaded from the user
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Component, Debug, Deserialize)]
 struct Config {
     source_dir: PathBuf,
     output_dir: PathBuf,
@@ -69,14 +69,17 @@ struct Config {
     site_url: String,
 }
 
+#[derive(Component)]
 struct LoadStaticContentGlob {
     glob: String,
 }
 
+#[derive(Component)]
 struct LoadTemplateGlob {
     glob: String,
 }
 
+#[derive(Component)]
 struct LoadDynamicContentGlob {
     glob: String,
     type_: DynamicContentType,
@@ -192,9 +195,10 @@ fn template_source_loader(query: Query<&LoadTemplateGlob>, mut commands: Command
     commands.insert_resource(tera);
 }
 
+#[derive(Component)]
 struct IsDynamicContent {}
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Component, Deserialize)]
 struct DynamicContentMetadata {
     route: String,
     title: String,
@@ -214,7 +218,7 @@ struct DynamicContentMetadata {
     og_description: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Component)]
 struct DynamicContentContents {
     contents: String,
 }
@@ -321,7 +325,7 @@ fn dynamic_content_source_loader(
 
 // URL (identifier) where this path will be at
 // TODO: Maybe allow the single page ones to define routes inline
-#[derive(Debug)]
+#[derive(Component, Debug)]
 struct URL {
     url: String,
     absolute: String,
@@ -385,7 +389,7 @@ impl tera::Function for UrlFor {
 }
 
 // A single entry to show in the navbar
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Component, Debug, Serialize)]
 struct NavbarEntry {
     url: String,
     title: String,
@@ -394,7 +398,7 @@ struct NavbarEntry {
 
 // Top level navbar available on pages to show at the top
 // Contains all top level routes that have a navbar enabled
-#[derive(Debug, Serialize)]
+#[derive(Component, Debug, Serialize)]
 struct Navbar {
     entries: Vec<NavbarEntry>,
 }
@@ -431,7 +435,7 @@ fn navbar_indexer(query: Query<(&URL, &DynamicContentMetadata)>, mut commands: C
 }
 
 // A single entry for a post in the blogpost index
-#[derive(Clone, Debug, Serialize)]
+#[derive(Component, Clone, Debug, Serialize)]
 struct BlogpostIndexEntry {
     url: String,
     slug: String,
@@ -449,7 +453,7 @@ struct BlogpostIndexEntry {
 // Top level index available for all entries in the blog
 // Contains all the posts and methods to access them efficiently
 // All results are in reverse sorted order by date
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Component, Debug, Serialize)]
 struct BlogpostIndex {
     entries: Vec<BlogpostIndexEntry>,
 }
@@ -495,12 +499,12 @@ impl BlogpostIndex {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Component, Serialize)]
 struct BlogpostTagsAndCounts {
     entries: Vec<(String, usize)>,
 }
 
-#[derive(Serialize)]
+#[derive(Component, Serialize)]
 struct BlogpostArchives {
     entries: Vec<(String, String, Vec<BlogpostIndexEntry>)>,
 }
@@ -589,7 +593,7 @@ fn blogpost_indexer(
     commands.insert_resource(BlogpostIndex { entries });
 }
 
-#[derive(Serialize)]
+#[derive(Component, Serialize)]
 struct Sitemap {
     entries: Vec<String>,
 }
@@ -814,14 +818,14 @@ fn dynamic_content_generator(
 // An input source file loaded from somewhere
 // Paths are relative to cwd
 // TODO: Verify this!
-#[derive(Debug, Clone)]
+#[derive(Component, Debug, Clone)]
 struct RelativeSourcePath {
     path: PathBuf,
 }
 
 // Location where this should be written out
 // All relative paths should eventually be made absolute
-#[derive(Debug)]
+#[derive(Component, Debug)]
 struct RelativeOutputPath {
     path: PathBuf,
 }
@@ -841,7 +845,7 @@ fn map_urls_to_relative_paths(
     }
 }
 
-#[derive(Debug)]
+#[derive(Component, Debug)]
 struct AbsoluteOutputPath {
     path: PathBuf,
 }
@@ -864,7 +868,9 @@ fn path_absoluter(
 }
 
 // Static file copy
+#[derive(Component)]
 struct IsStatiContent {}
+#[derive(Component)]
 struct CopySourceToOutput {}
 
 fn output_folder_creator(query: Query<&AbsoluteOutputPath>) {
@@ -905,6 +911,7 @@ fn static_file_copier(
     });
 }
 
+#[derive(Component)]
 struct WriteContentsToFile {
     contents: String,
 }
@@ -942,89 +949,69 @@ enum Stage {
     PersistOutput,
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
-enum SystemTag {
-    OutputFolderCreator,
-}
-
 fn run(config: Config) {
-    App::build()
+    App::new()
         .insert_resource(config)
         .add_stage_before(
             CoreStage::Update,
             Stage::ConfigProcessing,
             SystemStage::parallel(),
         )
-        .add_system_to_stage(Stage::ConfigProcessing, create_source_loaders.system())
+        .add_system_to_stage(Stage::ConfigProcessing, create_source_loaders)
         .add_stage_after(
             Stage::ConfigProcessing,
             Stage::SourceLoading,
             SystemStage::parallel(),
         )
-        .add_system_to_stage(Stage::SourceLoading, static_content_source_loader.system())
-        .add_system_to_stage(Stage::SourceLoading, template_source_loader.system())
-        .add_system_to_stage(Stage::SourceLoading, dynamic_content_source_loader.system())
+        .add_system_to_stage(Stage::SourceLoading, static_content_source_loader)
+        .add_system_to_stage(Stage::SourceLoading, template_source_loader)
+        .add_system_to_stage(Stage::SourceLoading, dynamic_content_source_loader)
         .add_stage_after(
             Stage::SourceLoading,
             Stage::AnalyzingDynamicContent,
             SystemStage::parallel(),
         )
-        .add_system_to_stage(Stage::AnalyzingDynamicContent, generate_urls.system())
+        .add_system_to_stage(Stage::AnalyzingDynamicContent, generate_urls)
         .add_stage_after(
             Stage::AnalyzingDynamicContent,
             Stage::IndexingDynamicContent,
             SystemStage::parallel(),
         )
-        .add_system_to_stage(Stage::IndexingDynamicContent, navbar_indexer.system())
-        .add_system_to_stage(Stage::IndexingDynamicContent, blogpost_indexer.system())
-        .add_system_to_stage(Stage::IndexingDynamicContent, sitemap_indexer.system())
+        .add_system_to_stage(Stage::IndexingDynamicContent, navbar_indexer)
+        .add_system_to_stage(Stage::IndexingDynamicContent, blogpost_indexer)
+        .add_system_to_stage(Stage::IndexingDynamicContent, sitemap_indexer)
         .add_stage_after(
             Stage::IndexingDynamicContent,
             Stage::SpawningDynamicContent,
             SystemStage::parallel(),
         )
-        .add_system_to_stage(Stage::SpawningDynamicContent, tag_page_generator.system())
+        .add_system_to_stage(Stage::SpawningDynamicContent, tag_page_generator)
         .add_stage_after(
             Stage::SpawningDynamicContent,
             Stage::GeneratingDynamicContent,
             SystemStage::parallel(),
         )
-        .add_system_to_stage(
-            Stage::GeneratingDynamicContent,
-            map_urls_to_relative_paths.system(),
-        )
-        .add_system_to_stage(
-            Stage::GeneratingDynamicContent,
-            dynamic_content_generator.system(),
-        )
+        .add_system_to_stage(Stage::GeneratingDynamicContent, map_urls_to_relative_paths)
+        .add_system_to_stage(Stage::GeneratingDynamicContent, dynamic_content_generator)
         .add_stage_after(
             Stage::GeneratingDynamicContent,
             Stage::PreparingForPersistence,
             SystemStage::parallel(),
         )
-        .add_system_to_stage(Stage::PreparingForPersistence, path_absoluter.system())
+        .add_system_to_stage(Stage::PreparingForPersistence, path_absoluter)
         .add_stage_after(
             Stage::PreparingForPersistence,
             Stage::PersistOutput,
             SystemStage::parallel(),
         )
+        .add_system_to_stage(Stage::PersistOutput, output_folder_creator)
         .add_system_to_stage(
             Stage::PersistOutput,
-            output_folder_creator
-                .system()
-                .label(SystemTag::OutputFolderCreator),
+            static_file_copier.after(output_folder_creator),
         )
         .add_system_to_stage(
             Stage::PersistOutput,
-            static_file_copier
-                .system()
-                .after(SystemTag::OutputFolderCreator),
-        )
-        .add_system_to_stage(
-            Stage::PersistOutput,
-            file_contents_writer
-                .system()
-                .after(SystemTag::OutputFolderCreator),
+            file_contents_writer.after(output_folder_creator),
         )
         .run();
 }
