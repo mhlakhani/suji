@@ -43,7 +43,25 @@ steps:
   - name: dockersock
     path: /var/run/docker.sock
   commands:
-    - docker build -t suji:$(cat .tags) --rm=false .
+    - docker build -t git.mhlakhani.com/mhl/suji:$(cat .tags) --rm=false .
+  when:
+    branch:
+      - master
+    event:
+      - push
+
+- name: push_docker
+  image: docker:dind
+  volumes:
+  - name: dockersock
+    path: /var/run/docker.sock
+  commands:
+    - docker login --username $USERNAME --password $PASSWORD git.mhlakhani.com && docker image push git.mhlakhani.com/mhl/suji:$(cat .tags)
+  environment:
+    USERNAME:
+      from_secret: docker_username
+    PASSWORD:
+      from_secret: docker_password
   when:
     branch:
       - master
@@ -57,3 +75,11 @@ volumes:
 - name: dockersock
   host:
     path: /var/run/docker.sock
+
+services:
+- name: docker
+  image: docker:dind
+  privileged: true
+  volumes:
+  - name: dockersock
+    path: /var/run
