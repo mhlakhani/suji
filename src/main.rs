@@ -449,7 +449,6 @@ struct BlogpostIndexEntry {
     date: String,
     year: String,
     month: String,
-    month_name: String,
     day: String,
     tags: Vec<String>,
     featured: bool,
@@ -491,14 +490,35 @@ impl BlogpostIndex {
     }
 
     fn archives(&self) -> Vec<(String, String, Vec<BlogpostIndexEntry>)> {
+        let month_names = maplit::hashmap! {
+            "01" => "January",
+            "02" => "February",
+            "03" => "March",
+            "04" => "April",
+            "05" => "May",
+            "06" => "June",
+            "07" => "July",
+            "08" => "August",
+            "09" => "September",
+            "10" => "October",
+            "11" => "November",
+            "12" => "December",
+        };
         self.entries
             .iter()
-            .map(|e| ((e.year.clone(), e.month_name.clone()), e.clone()))
+            .map(|e| ((e.year.clone(), e.month.clone()), e.clone()))
             .into_group_map()
             .into_iter()
             .collect::<BTreeMap<_, _>>()
             .into_iter()
-            .map(|((y, m), v)| (y, m, v))
+            .map(|((y, m), v)| {
+                let month_name = month_names
+                    .get(m.as_str())
+                    // TODO: Log the source?
+                    .unwrap_or_else(|| panic!("Invalid month: {}", m))
+                    .to_string();
+                (y, month_name, v)
+            })
             .rev()
             .collect()
     }
@@ -518,20 +538,6 @@ fn blogpost_indexer(
     query: Query<(&DynamicContentType, &URL, &DynamicContentMetadata)>,
     mut commands: Commands,
 ) {
-    let month_names = maplit::hashmap! {
-        "01" => "January",
-        "02" => "February",
-        "03" => "March",
-        "04" => "April",
-        "05" => "May",
-        "06" => "June",
-        "07" => "July",
-        "08" => "August",
-        "09" => "September",
-        "10" => "October",
-        "11" => "November",
-        "12" => "December",
-    };
     let mut entries: Vec<_> = query
         .iter()
         .filter(|(type_, _, _)| **type_ == DynamicContentType::Blogpost)
@@ -545,10 +551,6 @@ fn blogpost_indexer(
             let month = get_str("month");
             let day = get_str("day");
             // Do some basic validation
-            let month_name = month_names
-                .get(month.as_str())
-                .unwrap_or_else(|| panic!("Invalid month: {} for URL {}", month, url.url))
-                .to_string();
             // We need to validate the excerpt
             let excerpt = metadata
                 .stuff
@@ -583,7 +585,6 @@ fn blogpost_indexer(
                 date,
                 year,
                 month,
-                month_name,
                 day,
                 tags,
                 featured,
