@@ -197,13 +197,26 @@ fn template_source_loader(query: Query<&LoadTemplateGlob>, mut commands: Command
 #[derive(Component)]
 struct IsDynamicContent {}
 
+#[derive(Debug, Clone, Deserialize)]
+struct NavbarConfig {
+    // Index within the group
+    // For the primary entry, this is the index in the main group.
+    index: usize,
+    // If set, show this in the group keyed by 'foo'.
+    // If not set, this is the top level navbar
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    is_primary: bool,
+}
+
 #[derive(Debug, Clone, Component, Deserialize)]
 struct DynamicContentMetadata {
     route: String,
     title: String,
     template: Option<String>,
     #[serde(default)]
-    navbar: Option<usize>,
+    navbar: Option<NavbarConfig>,
     #[serde(default)]
     markdown: bool,
     #[serde(flatten)]
@@ -247,7 +260,13 @@ fn dynamic_content_source_loader(
             )
         });
         let mut metadata: DynamicContentMetadata = serde_json::from_str(&source[0..split + 2])
-            .unwrap_or_else(|_| panic!("Could not parse metadata in {}:", path.to_string_lossy()));
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Could not parse metadata in {}: {:?}",
+                    path.to_string_lossy(),
+                    e
+                )
+            });
         // TODO: See if we can avoid the copy here
         let contents = source[split + token.len()..].to_string();
         match type_ {
@@ -399,6 +418,7 @@ struct NavbarEntry {
     url: String,
     title: String,
     active: bool,
+    children: Vec<NavbarEntry>,
 }
 
 // Top level navbar available on pages to show at the top
@@ -410,13 +430,22 @@ struct Navbar {
 
 impl Navbar {
     fn for_(&self, url: &str) -> Navbar {
+        let is_active = |e: &NavbarEntry| e.url == url || (e.url != "/" && url.starts_with(&e.url));
         let entries: Vec<_> = self
             .entries
             .iter()
             .map(|e| {
-                let active = e.url == url || (e.url != "/" && url.starts_with(&e.url));
+                let children = e
+                    .children
+                    .iter()
+                    .map(|e| NavbarEntry {
+                        active: is_active(e),
+                        ..e.clone()
+                    })
+                    .collect();
                 NavbarEntry {
-                    active,
+                    active: is_active(e),
+                    children,
                     ..e.clone()
                 }
             })
@@ -426,15 +455,61 @@ impl Navbar {
 }
 
 fn navbar_indexer(query: Query<(&URL, &DynamicContentMetadata)>, mut commands: Commands) {
-    let entries: Vec<_> = query
+    let entries = query
         .iter()
-        .filter(|(_, metadata)| metadata.navbar.is_some())
-        .sorted_by(|a, b| a.1.navbar.cmp(&b.1.navbar))
-        .map(|(url, metadata)| NavbarEntry {
-            url: url.url.to_string(),
-            title: metadata.title.clone(),
-            active: false,
+        .filter_map(|(url, metadata)| {
+            metadata
+                .navbar
+                .as_ref()
+                .and_then(|navbar| Some((url, navbar, metadata.title.clone())))
         })
+        .sorted_by(|(_, n1, _), (_, n2, _)| n1.group.cmp(&n2.group))
+        .group_by(|(_, navbar, _)| navbar.group.as_ref())
+        .into_iter()
+        .flat_map(|(key, group)| {
+            let (mut primary, rest): (Vec<_>, Vec<_>) = group.partition(|e| e.1.is_primary);
+            let children = Box::new(
+                rest.into_iter()
+                    .sorted_by(|a, b| a.1.index.cmp(&b.1.index))
+                    .map(|(url, config, title)| {
+                        (
+                            config.index,
+                            NavbarEntry {
+                                url: url.url.to_string(),
+                                title,
+                                active: false,
+                                children: vec![],
+                            },
+                        )
+                    }),
+            );
+            if key.is_none() {
+                return children.collect();
+            }
+            if primary.len() > 1 {
+                panic!(
+                    "Expected navbar group {:?} to have at most one primary element, got {}!",
+                    key,
+                    primary.len()
+                );
+            }
+            let primary = primary.pop().expect(&format!(
+                "must have at least one primary element for navbar group {:?}!",
+                key
+            ));
+            let children = children.map(|(_, child)| child).collect();
+            vec![(
+                primary.1.index,
+                NavbarEntry {
+                    url: primary.0.url.to_string(),
+                    title: primary.2,
+                    active: false,
+                    children,
+                },
+            )]
+        })
+        .sorted_by(|(i1, _), (i2, _)| i1.cmp(&i2))
+        .map(|(_, e)| e)
         .collect();
     commands.insert_resource(Navbar { entries });
 }
