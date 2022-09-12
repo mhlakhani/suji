@@ -171,7 +171,8 @@ fn static_content_source_loader(
             })
             .insert(RelativeOutputPath { path: relative })
             .insert(CopySourceToOutput {})
-            .insert(IsStatiContent {});
+            .insert(IsStatiContent {})
+            .insert(ExcludeFromSitemap {});
     }
 }
 
@@ -228,6 +229,8 @@ struct DynamicContentMetadata {
     og_type: String,
     #[serde(default)]
     og_description: String,
+    #[serde(default)]
+    exclude_from_sitemap: bool,
 }
 
 #[derive(Debug, Clone, Component)]
@@ -269,6 +272,7 @@ fn dynamic_content_source_loader(
             });
         // TODO: See if we can avoid the copy here
         let contents = source[split + token.len()..].to_string();
+        let exclude_from_sitemap = metadata.exclude_from_sitemap;
         match type_ {
             DynamicContentType::Blogpost => {
                 metadata.markdown = true;
@@ -336,13 +340,16 @@ fn dynamic_content_source_loader(
             | DynamicContentType::BlogpostRssPage
             | DynamicContentType::SitemapPage => {}
         };
-        commands
-            .spawn()
+        let mut builder = commands.spawn();
+        builder
             .insert(RelativeSourcePath { path: relative })
             .insert(IsDynamicContent {})
             .insert(metadata)
             .insert(DynamicContentContents { contents })
             .insert(type_);
+        if exclude_from_sitemap {
+            builder.insert(ExcludeFromSitemap {});
+        }
     }
 }
 
@@ -671,12 +678,15 @@ fn blogpost_indexer(
     commands.insert_resource(BlogpostIndex { entries });
 }
 
+#[derive(Component)]
+struct ExcludeFromSitemap {}
+
 #[derive(Component, Serialize)]
 struct Sitemap {
     entries: Vec<String>,
 }
 
-fn sitemap_indexer(query: Query<&URL, Without<IsStatiContent>>, mut commands: Commands) {
+fn sitemap_indexer(query: Query<&URL, Without<ExcludeFromSitemap>>, mut commands: Commands) {
     let entries: BTreeSet<String> = query.iter().map(|u| u.url.clone()).collect();
     commands.insert_resource(Sitemap {
         entries: entries.into_iter().collect(),
