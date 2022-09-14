@@ -1124,11 +1124,9 @@ struct Args {
     port: u16,
 }
 
-#[tokio::main]
-async fn main() {
-    let args = Args::from_args();
-    let source = std::fs::read_to_string(&args.config_path)
-        .unwrap_or_else(|_| panic!("Unable to config file {}", args.config_path));
+fn get_config_from_path(path: &str) -> Config {
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|_| panic!("Unable to find config file {}", path));
     let mut config: Config =
         serde_json::from_str(&source).expect("Config is not in the expected format!");
     let cwd = std::env::current_dir().expect("Couldn't get current dir!");
@@ -1143,6 +1141,13 @@ async fn main() {
     if config.output_dir.is_relative() {
         config.output_dir = cwd.join(config.output_dir);
     }
+    config
+}
+
+#[tokio::main]
+async fn main() {
+    let args = Args::from_args();
+    let config = get_config_from_path(&args.config_path);
 
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
@@ -1154,7 +1159,11 @@ async fn main() {
     run(config.clone());
 
     if args.watch {
-        let config = config.clone();
+        let config_path_str = args.config_path.clone();
+        let config_path = PathBuf::from(&config_path_str)
+            .canonicalize()
+            .expect("Couldn't canonicalize config path!");
+        let mut config = config.clone();
         let source_dir = config.source_dir.clone();
         let output_dir = config.output_dir.clone();
         let logger = logger.clone();
@@ -1180,7 +1189,11 @@ async fn main() {
                             if let Some(path) = maybe_path {
                                 if path.starts_with(&output_dir) {
                                     // Swallow
-                                } else {
+                                }  else {
+                                    if path == config_path.as_path() {
+                                        info!(logger2, "Reloading config...");
+                                        config = get_config_from_path(&config_path_str);
+                                    }
                                     info!(logger2, "Rerunning generation..."; "event" => ?event);
                                     run(config.clone());
                                 }
