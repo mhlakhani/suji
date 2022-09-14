@@ -1195,7 +1195,9 @@ async fn main() {
                                         config = get_config_from_path(&config_path_str);
                                     }
                                     info!(logger2, "Rerunning generation..."; "event" => ?event);
-                                    run(config.clone());
+                                    if let Err(e) = std::panic::catch_unwind(|| run(config.clone())) {
+                                        error!(logger2, "Error running generation:"; "error" => ?e);
+                                    }
                                 }
                             };
                             Flow::Continue
