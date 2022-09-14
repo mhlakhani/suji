@@ -21,7 +21,7 @@ use tower_http::services::ServeDir;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::{path::Path, path::PathBuf};
 
-#[derive(Debug, Clone, Component, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 enum SourceType {
     // File will be copied to the corresponding path in the output dir directly
     StaticContent,
@@ -195,9 +195,6 @@ fn template_source_loader(query: Query<&LoadTemplateGlob>, mut commands: Command
     commands.insert_resource(tera);
 }
 
-#[derive(Component)]
-struct IsDynamicContent {}
-
 #[derive(Debug, Clone, Deserialize)]
 struct NavbarConfig {
     // Index within the group
@@ -211,6 +208,7 @@ struct NavbarConfig {
     is_primary: bool,
 }
 
+// TODO: This should not be a component, just a config
 #[derive(Debug, Clone, Component, Deserialize)]
 struct DynamicContentMetadata {
     route: String,
@@ -343,7 +341,6 @@ fn dynamic_content_source_loader(
         let mut builder = commands.spawn();
         builder
             .insert(RelativeSourcePath { path: relative })
-            .insert(IsDynamicContent {})
             .insert(metadata)
             .insert(DynamicContentContents { contents })
             .insert(type_);
@@ -420,7 +417,7 @@ impl tera::Function for UrlFor {
 }
 
 // A single entry to show in the navbar
-#[derive(Clone, Component, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct NavbarEntry {
     url: String,
     title: String,
@@ -522,7 +519,8 @@ fn navbar_indexer(query: Query<(&URL, &DynamicContentMetadata)>, mut commands: C
 }
 
 // A single entry for a post in the blogpost index
-#[derive(Component, Clone, Debug, Serialize)]
+// TODO: This should probably be separate components!
+#[derive(Clone, Debug, Serialize)]
 struct BlogpostIndexEntry {
     url: String,
     slug: String,
@@ -725,7 +723,6 @@ fn tag_page_generator(
             commands
                 .spawn()
                 .insert(source_path)
-                .insert(IsDynamicContent {})
                 .insert(metadata)
                 .insert(contents)
                 .insert(type_.clone())
