@@ -6,22 +6,23 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-axum = "0.3"
-bevy_app = "0.7"
-bevy_ecs = "0.7"
-bevy_tasks = "0.7"
+axum = "0.7"
+bevy_app = "0.13"
+bevy_ecs = "0.13"
+bevy_tasks = "0.13"
 glob = "0.3"
-hotwatch = "0.4"
-itertools = "0.10"
+hotwatch = "0.5"
+itertools = "0.13"
 maplit = "1"
-pulldown-cmark = "0.8"
+pulldown-cmark = "0.11"
 tera = "1"
 serde = "1"
 serde_derive = "1"
 serde_json = "1"
 slog = "2.7"
-slog-term = "2.7"
-slog-async = "2.7"
+slog-term = "2.9"
+slog-async = "2.8"
 structopt = "0.3"
-tokio = { version = "1.0", features = ["full"] }
-tower-http = { version = "0.1", features = ["fs"] }
+tokio = { version = "1.37", features = ["full"] }
+tower-http = { version = "0.5", features = ["fs"] }
+tower = "0.4.13"

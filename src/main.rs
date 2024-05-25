@@ -1,25 +1,19 @@
-use axum::{
-    error_handling::HandleErrorExt, http::StatusCode, routing::service_method_routing as service,
-    Router,
-};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::net::SocketAddr;
+use std::ops::{Deref, DerefMut};
+use std::path::{Path, PathBuf};
+
+use axum::Router;
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
-use bevy_tasks::prelude::*;
-use hotwatch::{
-    blocking::{Flow, Hotwatch},
-    Event,
-};
+use hotwatch::blocking::{Flow, Hotwatch};
 use itertools::Itertools;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::Value;
 use slog::{error, info, o, Drain};
-use std::net::SocketAddr;
 use structopt::StructOpt;
 use tera::Tera;
 use tower_http::services::ServeDir;
-
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::{path::Path, path::PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 enum SourceType {
@@ -58,7 +52,7 @@ enum DynamicContentType {
 }
 
 // Immutable config loaded from the user
-#[derive(Clone, Component, Debug, Deserialize)]
+#[derive(Clone, Resource, Debug, Deserialize)]
 struct Config {
     source_dir: PathBuf,
     output_dir: PathBuf,
@@ -90,46 +84,46 @@ fn create_source_loaders(config: Res<Config>, mut commands: Commands) {
         match source {
             SourceType::StaticContent => {
                 commands
-                    .spawn()
+                    .spawn_empty()
                     .insert(LoadStaticContentGlob { glob: glob.clone() });
             }
             SourceType::Template => {
                 commands
-                    .spawn()
+                    .spawn_empty()
                     .insert(LoadTemplateGlob { glob: glob.clone() });
             }
             SourceType::DynamicContentSinglePage => {
-                commands.spawn().insert(LoadDynamicContentGlob {
+                commands.spawn_empty().insert(LoadDynamicContentGlob {
                     glob: glob.clone(),
                     type_: DynamicContentType::SinglePage,
                 });
             }
             SourceType::DynamicContentBlogPost => {
-                commands.spawn().insert(LoadDynamicContentGlob {
+                commands.spawn_empty().insert(LoadDynamicContentGlob {
                     glob: glob.clone(),
                     type_: DynamicContentType::Blogpost,
                 });
             }
             SourceType::DynamicContentBlogpostTagPage => {
-                commands.spawn().insert(LoadDynamicContentGlob {
+                commands.spawn_empty().insert(LoadDynamicContentGlob {
                     glob: glob.clone(),
                     type_: DynamicContentType::BlogpostTagPage,
                 });
             }
             SourceType::DynamicContentBlogpostArchivePage => {
-                commands.spawn().insert(LoadDynamicContentGlob {
+                commands.spawn_empty().insert(LoadDynamicContentGlob {
                     glob: glob.clone(),
                     type_: DynamicContentType::BlogpostArchivePage,
                 });
             }
             SourceType::DynamicContentBlogpostRssPage => {
-                commands.spawn().insert(LoadDynamicContentGlob {
+                commands.spawn_empty().insert(LoadDynamicContentGlob {
                     glob: glob.clone(),
                     type_: DynamicContentType::BlogpostRssPage,
                 });
             }
             SourceType::DynamicContentSitemap => {
-                commands.spawn().insert(LoadDynamicContentGlob {
+                commands.spawn_empty().insert(LoadDynamicContentGlob {
                     glob: glob.clone(),
                     type_: DynamicContentType::SitemapPage,
                 });
@@ -161,7 +155,7 @@ fn static_content_source_loader(
     for path in paths {
         let relative = make_relative(&path, config.source_dir.as_path());
         commands
-            .spawn()
+            .spawn_empty()
             .insert(RelativeSourcePath {
                 path: relative.clone(),
             })
@@ -171,8 +165,27 @@ fn static_content_source_loader(
             })
             .insert(RelativeOutputPath { path: relative })
             .insert(CopySourceToOutput {})
-            .insert(IsStatiContent {})
+            .insert(IsStaticContent {})
             .insert(ExcludeFromSitemap {});
+    }
+}
+
+#[derive(Resource)]
+struct TeraResource {
+    tera: Tera,
+}
+
+impl Deref for TeraResource {
+    type Target = Tera;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tera
+    }
+}
+
+impl DerefMut for TeraResource {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tera
     }
 }
 
@@ -192,7 +205,7 @@ fn template_source_loader(query: Query<&LoadTemplateGlob>, mut commands: Command
         tera.extend(&new)
             .unwrap_or_else(|_| panic!("Unable to extend with templates from {}", glob.glob));
     }
-    commands.insert_resource(tera);
+    commands.insert_resource(TeraResource { tera });
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -338,7 +351,7 @@ fn dynamic_content_source_loader(
             | DynamicContentType::BlogpostRssPage
             | DynamicContentType::SitemapPage => {}
         };
-        let mut builder = commands.spawn();
+        let mut builder = commands.spawn_empty();
         builder
             .insert(RelativeSourcePath { path: relative })
             .insert(metadata)
@@ -427,7 +440,7 @@ struct NavbarEntry {
 
 // Top level navbar available on pages to show at the top
 // Contains all top level routes that have a navbar enabled
-#[derive(Component, Debug, Serialize)]
+#[derive(Resource, Debug, Serialize)]
 struct Navbar {
     entries: Vec<NavbarEntry>,
 }
@@ -464,11 +477,10 @@ fn navbar_indexer(query: Query<(&URL, &DynamicContentMetadata)>, mut commands: C
         .filter_map(|(url, metadata)| {
             metadata
                 .navbar
-                .as_ref()
-                .and_then(|navbar| Some((url, navbar, metadata.title.clone())))
+                .as_ref().map(|navbar| (url, navbar, metadata.title.clone()))
         })
         .sorted_by(|(_, n1, _), (_, n2, _)| n1.group.cmp(&n2.group))
-        .group_by(|(_, navbar, _)| navbar.group.as_ref())
+        .chunk_by(|(_, navbar, _)| navbar.group.as_ref())
         .into_iter()
         .flat_map(|(key, group)| {
             let (mut primary, rest): (Vec<_>, Vec<_>) = group.partition(|e| e.1.is_primary);
@@ -497,10 +509,8 @@ fn navbar_indexer(query: Query<(&URL, &DynamicContentMetadata)>, mut commands: C
                     primary.len()
                 );
             }
-            let primary = primary.pop().expect(&format!(
-                "must have at least one primary element for navbar group {:?}!",
-                key
-            ));
+            let primary = primary.pop().unwrap_or_else(|| panic!("must have at least one primary element for navbar group {:?}!",
+                key));
             let children = children.map(|(_, child)| child).collect();
             vec![(
                 primary.1.index,
@@ -512,7 +522,7 @@ fn navbar_indexer(query: Query<(&URL, &DynamicContentMetadata)>, mut commands: C
                 },
             )]
         })
-        .sorted_by(|(i1, _), (i2, _)| i1.cmp(&i2))
+        .sorted_by(|(i1, _), (i2, _)| i1.cmp(i2))
         .map(|(_, e)| e)
         .collect();
     commands.insert_resource(Navbar { entries });
@@ -537,7 +547,7 @@ struct BlogpostIndexEntry {
 // Top level index available for all entries in the blog
 // Contains all the posts and methods to access them efficiently
 // All results are in reverse sorted order by date
-#[derive(Clone, Component, Debug, Serialize)]
+#[derive(Clone, Resource, Debug, Serialize)]
 struct BlogpostIndex {
     entries: Vec<BlogpostIndexEntry>,
 }
@@ -679,7 +689,7 @@ fn blogpost_indexer(
 #[derive(Component)]
 struct ExcludeFromSitemap {}
 
-#[derive(Component, Serialize)]
+#[derive(Resource, Serialize)]
 struct Sitemap {
     entries: Vec<String>,
 }
@@ -721,7 +731,7 @@ fn tag_page_generator(
             let source_path = source_path.clone();
             let contents = contents.clone();
             commands
-                .spawn()
+                .spawn_empty()
                 .insert(source_path)
                 .insert(metadata)
                 .insert(contents)
@@ -777,7 +787,7 @@ fn dynamic_content_generator(
     navbar: Res<Navbar>,
     blogindex: Res<BlogpostIndex>,
     sitemap: Res<Sitemap>,
-    mut tera: ResMut<Tera>,
+    mut tera: ResMut<TeraResource>,
     query: Query<(
         Entity,
         &URL,
@@ -956,7 +966,7 @@ fn path_absoluter(
 
 // Static file copy
 #[derive(Component)]
-struct IsStatiContent {}
+struct IsStaticContent {}
 #[derive(Component)]
 struct CopySourceToOutput {}
 
@@ -979,7 +989,6 @@ fn output_folder_creator(query: Query<&AbsoluteOutputPath>) {
 }
 
 fn static_file_copier(
-    pool: Res<ComputeTaskPool>,
     query: Query<(
         &RelativeSourcePath,
         &AbsoluteOutputPath,
@@ -987,7 +996,7 @@ fn static_file_copier(
     )>,
 ) {
     // TODO: Look at batch sizes here
-    query.par_for_each(&pool, 8, |(from, to, _)| {
+    query.par_iter().for_each(|(from, to, _)| {
         std::fs::copy(from.path.as_path(), to.path.as_path()).unwrap_or_else(|_| {
             panic!(
                 "Unable to copy {} to {}",
@@ -1003,12 +1012,9 @@ struct WriteContentsToFile {
     contents: String,
 }
 
-fn file_contents_writer(
-    pool: Res<ComputeTaskPool>,
-    query: Query<(&AbsoluteOutputPath, &WriteContentsToFile)>,
-) {
+fn file_contents_writer(query: Query<(&AbsoluteOutputPath, &WriteContentsToFile)>) {
     // TODO: Look at batch sizes here
-    query.par_for_each(&pool, 8, |(path, contents)| {
+    query.par_iter().for_each(|(path, contents)| {
         std::fs::write(path.path.as_path(), &contents.contents).unwrap_or_else(|_| {
             panic!(
                 "Unable to write output to {}",
@@ -1018,90 +1024,84 @@ fn file_contents_writer(
     });
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, StageLabel)]
-enum Stage {
-    // Process the configs, create the loaders
-    ConfigProcessing,
-    // Load all the sources into memory as appropriate
-    SourceLoading,
-    // Analyzing dynamic content, generates items from each content item
-    AnalyzingDynamicContent,
-    // Indexes dynamic content, looking up things from the previous analysis
-    IndexingDynamicContent,
-    // Spawning more (derived) dynamic content based on index results
-    SpawningDynamicContent,
-    // Generating dynamic content
-    GeneratingDynamicContent,
-    // Preparing output for persistence
-    PreparingForPersistence,
-    // Final stage. Write out all the output
-    PersistOutput,
-}
+// Process the configs, create the loaders
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct ConfigProcessingStage;
+
+// Load all the sources into memory as appropriate
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct SourceLoadingStage;
+
+// Analyzing dynamic content, generates items from each content item
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct AnalyzingDynamicContentStage;
+
+// Indexes dynamic content, looking up things from the previous analysis
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct IndexingDynamicContentStage;
+
+// Spawning more (derived) dynamic content based on index results
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct SpawningDynamicContentStage;
+
+// Generating dynamic content
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct GeneratingDynamicContentStage;
+
+// Preparing output for persistence
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct PreparingForPersistenceStage;
+
+// Final stage. Write out all the output
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct PersistOutputStage;
 
 fn run(config: Config) {
     App::new()
         .insert_resource(config)
-        .add_stage_before(
-            CoreStage::Update,
-            Stage::ConfigProcessing,
-            SystemStage::parallel(),
-        )
-        .add_system_to_stage(Stage::ConfigProcessing, create_source_loaders)
-        .add_stage_after(
-            Stage::ConfigProcessing,
-            Stage::SourceLoading,
-            SystemStage::parallel(),
-        )
-        .add_system_to_stage(Stage::SourceLoading, static_content_source_loader)
-        .add_system_to_stage(Stage::SourceLoading, template_source_loader)
-        .add_system_to_stage(Stage::SourceLoading, dynamic_content_source_loader)
-        .add_stage_after(
-            Stage::SourceLoading,
-            Stage::AnalyzingDynamicContent,
-            SystemStage::parallel(),
-        )
-        .add_system_to_stage(Stage::AnalyzingDynamicContent, generate_urls)
-        .add_stage_after(
-            Stage::AnalyzingDynamicContent,
-            Stage::IndexingDynamicContent,
-            SystemStage::parallel(),
-        )
-        .add_system_to_stage(Stage::IndexingDynamicContent, navbar_indexer)
-        .add_system_to_stage(Stage::IndexingDynamicContent, blogpost_indexer)
-        .add_system_to_stage(Stage::IndexingDynamicContent, sitemap_indexer)
-        .add_stage_after(
-            Stage::IndexingDynamicContent,
-            Stage::SpawningDynamicContent,
-            SystemStage::parallel(),
-        )
-        .add_system_to_stage(Stage::SpawningDynamicContent, tag_page_generator)
-        .add_stage_after(
-            Stage::SpawningDynamicContent,
-            Stage::GeneratingDynamicContent,
-            SystemStage::parallel(),
-        )
-        .add_system_to_stage(Stage::GeneratingDynamicContent, map_urls_to_relative_paths)
-        .add_system_to_stage(Stage::GeneratingDynamicContent, dynamic_content_generator)
-        .add_stage_after(
-            Stage::GeneratingDynamicContent,
-            Stage::PreparingForPersistence,
-            SystemStage::parallel(),
-        )
-        .add_system_to_stage(Stage::PreparingForPersistence, path_absoluter)
-        .add_stage_after(
-            Stage::PreparingForPersistence,
-            Stage::PersistOutput,
-            SystemStage::parallel(),
-        )
-        .add_system_to_stage(Stage::PersistOutput, output_folder_creator)
-        .add_system_to_stage(
-            Stage::PersistOutput,
-            static_file_copier.after(output_folder_creator),
-        )
-        .add_system_to_stage(
-            Stage::PersistOutput,
-            file_contents_writer.after(output_folder_creator),
-        )
+        .add_systems(Update, (
+            (
+                create_source_loaders
+            ).in_set(ConfigProcessingStage),
+            (
+                static_content_source_loader,
+                template_source_loader,
+                dynamic_content_source_loader
+            ).in_set(SourceLoadingStage),
+            (
+                generate_urls
+            ).in_set(AnalyzingDynamicContentStage),
+            (
+                navbar_indexer,
+                blogpost_indexer,
+                sitemap_indexer
+            ).in_set(IndexingDynamicContentStage),
+            (
+                tag_page_generator
+            ).in_set(SpawningDynamicContentStage),
+            (
+                map_urls_to_relative_paths,
+                dynamic_content_generator
+            ).in_set(GeneratingDynamicContentStage),
+            (
+                path_absoluter
+            ).in_set(PreparingForPersistenceStage),
+            (
+                output_folder_creator,
+                static_file_copier.after(output_folder_creator),
+                file_contents_writer.after(output_folder_creator)
+            ).in_set(PersistOutputStage)
+        ))
+        .configure_sets(Update, (
+            ConfigProcessingStage,
+            SourceLoadingStage.after(ConfigProcessingStage),
+            AnalyzingDynamicContentStage.after(SourceLoadingStage),
+            IndexingDynamicContentStage.after(AnalyzingDynamicContentStage),
+            SpawningDynamicContentStage.after(IndexingDynamicContentStage),
+            GeneratingDynamicContentStage.after(SpawningDynamicContentStage),
+            PreparingForPersistenceStage.after(GeneratingDynamicContentStage),
+            PersistOutputStage.after(PreparingForPersistenceStage)
+        ))
         .run();
 }
 
@@ -1130,7 +1130,7 @@ fn get_config_from_path(path: &str) -> Config {
 
     // TODO: Verify config is inside source dir
     if config.source_dir.to_string_lossy() == "." {
-        config.source_dir = cwd.clone();
+        config.source_dir.clone_from(&cwd);
     }
     if config.source_dir.is_relative() {
         config.source_dir = cwd.join(config.source_dir);
@@ -1168,62 +1168,35 @@ async fn main() {
             let logger2 = logger.clone();
             let mut watcher = Hotwatch::new().expect("Couldn't create watcher!");
             watcher
-                    .watch(&source_dir, move |event| {
-                        if let Event::Error(e, path) = event {
-                            error!(logger2, "Error watching file system!"; "error" => ?e, "path" => ?path);
-                            Flow::Exit
-                        } else {
-                            let maybe_path = match &event {
-                                // These events can't affect the output
-                                Event::Chmod(_) | Event::Error(_, _) | Event::Rescan => None,
-                                // We ignore the Write and Remove as we want to react faster,
-                                // so we just handle the notices
-                                Event::Write(_) | Event::Remove(_) => None,
-                                Event::Create(path) => Some(path),
-                                Event::NoticeWrite(path) | Event::NoticeRemove(path) => Some(path),
-                                Event::Rename(_from, to) => Some(to),
-                            };
-                            if let Some(path) = maybe_path {
-                                if path.starts_with(&output_dir) {
-                                    // Swallow
-                                }  else {
-                                    if path == config_path.as_path() {
-                                        info!(logger2, "Reloading config...");
-                                        config = get_config_from_path(&config_path_str);
-                                    }
-                                    info!(logger2, "Rerunning generation..."; "event" => ?event);
-                                    if let Err(e) = std::panic::catch_unwind(|| run(config.clone())) {
-                                        error!(logger2, "Error running generation:"; "error" => ?e);
-                                    }
-                                }
-                            };
-                            Flow::Continue
+                .watch(&source_dir, move |event| {
+                    if !(event.kind.is_modify() || event.kind.is_create()) {
+                        return Flow::Continue;
+                    }
+                    let should_reload = event.paths.iter().any(|p| p == config_path.as_path());
+                    let should_rerun = event.paths.iter().any(|p| !p.starts_with(&output_dir));
+                    if should_reload {
+                        info!(logger2, "Reloading config...");
+                        config = get_config_from_path(&config_path_str);
+                    }
+                    if should_reload || should_rerun {
+                        info!(logger2, "Rerunning generation..."; "event" => ?event);
+                        if let Err(e) = std::panic::catch_unwind(|| run(config.clone())) {
+                            error!(logger2, "Error running generation:"; "error" => ?e);
                         }
-                    })
-                    .expect("Couldn't watch!");
+                    }
+                    Flow::Continue
+                })
+                .expect("Couldn't watch!");
             info!(logger, "Watcher successfully set up...");
             watcher.run();
         });
     }
 
     if args.serve {
-        let logger2 = logger.clone();
-        let app = Router::new().nest(
-            "/",
-            service::get(ServeDir::new(config.output_dir.clone())).handle_error(
-                move |error: std::io::Error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        error!(logger2, "Unhandled internal error"; "error" => ?error),
-                    )
-                },
-            ),
-        );
+        let app = Router::new().nest_service("/", ServeDir::new(config.output_dir.clone()));
         let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         info!(logger, "Setup HTTP server to listen on"; "port" => args.port);
-        axum::Server::bind(&addr)
-            .serve(app.into_make_service())
-            .await
-            .expect("Couldn't serve output directory!")
+        axum::serve(listener, app).await.unwrap();
     }
 }
